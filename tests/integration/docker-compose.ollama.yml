@@ -1,0 +1,57 @@
+# Compose override that swaps the FastAPI LLM stub for a real Ollama
+# container. Opt-in dev path — heavier (multi-GB image + model pull) and
+# non-deterministic, so NOT used in CI.
+#
+# Usage (from repo root):
+#   make integration-up-ollama
+# which runs:
+#   docker compose -f tests/integration/docker-compose.yml \
+#                  -f tests/integration/docker-compose.ollama.yml up
+#
+# The first run pulls llama3.2:3b inside the container (a few minutes,
+# ~2GB). The model is small enough to run on Apple Silicon CPU; for a
+# beefier validation point Ollama at GPU per its docs.
+
+services:
+  llm-stub:
+    image: ollama/ollama:latest
+    container_name: detectflow-llm-ollama
+    # !override drops the base service's `8001:8000` (FastAPI stub) instead
+    # of merging — without this, both mappings would try to bind host 8001
+    # and `make integration-up-ollama` fails at startup.
+    ports: !override
+      - "8001:11434"
+    volumes:
+      - detectflow-ollama-models:/root/.ollama
+    # Pull the model on first boot, then `ollama serve` blocks normally.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve & SERVE_PID=$$!
+        for _ in $$(seq 1 30); do ollama list >/dev/null 2>&1 && break; sleep 1; done
+        ollama pull llama3.2:3b
+        wait $$SERVE_PID
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 && ollama list | grep -q llama3.2:3b"]
+      interval: 10s
+      timeout: 5s
+      retries: 60  # model pull can be slow on first run
+
+  # Agent-side env points at Ollama instead of the FastAPI stub. Settings()
+  # loads on the TM (Python worker at runtime) and on the submitter
+  # (job graph build time) — both must override LLM_*. JM only orchestrates,
+  # so no env there. Mirrors how the base compose distributes env vars.
+  flink-agent-tm:
+    environment:
+      LLM_BASE_URL: http://llm-stub:11434/v1
+      LLM_API_KEY: ollama
+      LLM_MODEL: llama3.2:3b
+
+  agent-job:
+    environment:
+      LLM_BASE_URL: http://llm-stub:11434/v1
+      LLM_API_KEY: ollama
+      LLM_MODEL: llama3.2:3b
+
+volumes:
+  detectflow-ollama-models:

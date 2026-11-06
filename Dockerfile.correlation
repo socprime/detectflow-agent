@@ -1,0 +1,98 @@
+# =============================================================================
+# DetectFlow correlation-job — K8s Operator image (Apache Flink base)
+# =============================================================================
+#
+# Runs `python -m app.jobs.correlation`. THREAD mode (Pemja) by default — the
+# matcher runs in-process (no Beam/gRPC), which sidesteps the process-mode
+# first-keyed-bundle deadlock seen on Kubernetes. Process mode is still
+# selectable via CORRELATION_PYTHON_MODE=process for A/B (see __main__.py).
+#
+# Dependencies: only the [correlation] extra (apache-flink). No flink-agents,
+# no openai — keeps the image lean (~1 GB smaller than agent flavor).
+#
+# Build (no build args — all dependencies resolve from public indexes per
+# uv.lock):
+#   docker build -f Dockerfile.correlation -t detectflow-agent-correlation:dev .
+# =============================================================================
+
+# java17 (not java11): same base as detectflow-matchnode's matcher (same
+# KeyedBroadcastProcessFunction + Kafka connector).
+FROM flink:2.2.0-scala_2.12-java17
+
+USER root
+
+# Python 3.11 from the deadsnakes PPA — flink:2.2.0 base ships only the
+# distro default python, which is too new (3.12+) on bookworm and not
+# resolvable via apt-pinned `python3.11` directly.
+RUN set -ex; apt-get update && \
+    apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl gpg gpg-agent && \
+    add-apt-repository -y ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        openjdk-17-jdk-headless \
+        python3.11 python3.11-venv python3.11-dev \
+        python3-pip libpython3.11 \
+        gcc g++ && \
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python3 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set JAVA_HOME so the JVM resolves (and Beam worker subprocesses too, if
+# process mode is selected via CORRELATION_PYTHON_MODE=process).
+RUN ARCH=$(dpkg --print-architecture) && \
+    ln -sf /usr/lib/jvm/java-17-openjdk-${ARCH} /usr/lib/jvm/java-17
+ENV JAVA_HOME=/usr/lib/jvm/java-17
+
+# uv — project's package manager.
+COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /bin/
+
+WORKDIR /opt/flink/usrlib
+
+# Copy lock + manifest first for layer caching.
+COPY pyproject.toml uv.lock ./
+
+# Copy app source (needed for hatchling install discovery).
+COPY app /opt/flink/usrlib/app
+
+# Install into an isolated .venv with python3.11 — avoids cross-talk with
+# the system python (apt-installed gpg etc. live under /usr/lib/python3 with
+# the distro default, which would otherwise leak into --system installs).
+# apache-flink-libraries is a ~300MB wheel — the default 30s uv timeout is
+# not enough on slow links.
+ENV UV_HTTP_TIMEOUT=300
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --extra correlation
+
+# Drop build deps after Python packages are installed.
+RUN apt-get purge -y --auto-remove gcc g++ python3.11-dev && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Surface the venv on PATH so `python -m app.jobs.correlation` resolves.
+ENV PATH="/opt/flink/usrlib/.venv/bin:$PATH"
+
+# Kafka connector → Flink classpath (auto-loaded by JM/TM at startup).
+# zstd-jni provides the native zstd codec the Kafka client lazy-loads when
+# compression.type=zstd; the connector jar above does not bundle it.
+COPY lib/flink-sql-connector-kafka-4.0.1-2.0.jar /opt/flink/lib/
+COPY lib/zstd-jni-1.5.6-6.jar /opt/flink/lib/
+
+# Logging config.
+COPY log4j2.properties /opt/flink/usrlib/log4j2.properties
+
+# Filesystem prep.
+RUN mkdir -p /opt/flink/checkpoints /opt/flink/log /opt/flink/usrlib/logs && \
+    chown -R flink:flink /opt/flink/checkpoints /opt/flink/log /opt/flink/usrlib
+
+ENV PYTHONPATH="/opt/flink/usrlib:$PYTHONPATH"
+ENV PYTHONUNBUFFERED=1
+# Force UTC so timezone-less event timestamps bucket deterministically and the
+# deterministic chain_id is host-TZ-independent (matches _parse_iso_to_epoch).
+ENV TZ=UTC
+
+USER flink
+WORKDIR /opt/flink
+
+EXPOSE 8081 6123
+
+# K8s Operator drives the entrypoint via PythonDriver — no CMD/ENTRYPOINT.

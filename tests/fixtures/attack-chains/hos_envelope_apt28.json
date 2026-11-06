@@ -1,0 +1,23 @@
+{
+  "id": "40500000-0000-4000-8000-000000000028",
+  "active_threat_id": "a7000000-0000-4000-8000-000000000028",
+  "title": "APT28 Sample Chain",
+  "description": "APT28 Sample Chain",
+  "level": "HIGH",
+  "status_lifecycle": "stable",
+  "author": "Prime Detect Tests",
+  "references": [
+    "https://example.com/active-threats/apt28"
+  ],
+  "tags": [
+    "attack.T1203",
+    "attack.T1105",
+    "attack.T1068",
+    "attack.T1119",
+    "attack.T1560.001",
+    "attack.T1070",
+    "active_threat.a7000000-0000-4000-8000-000000000028"
+  ],
+  "yaml_text": "title: APT28 Sample Chain\ndescription: APT28 Sample Chain\nid: 40500000-0000-4000-8000-000000000028\nstatus: stable\nauthor: Prime Detect Tests\nreferences:\n  - https://example.com/active-threats/apt28\ntags:\n  - attack.T1203\n  - attack.T1105\n  - attack.T1068\n  - attack.T1119\n  - attack.T1560.001\n  - attack.T1070\n  - active_threat.a7000000-0000-4000-8000-000000000028\nlogsource:\n  category: detectflow\ndetection:\n  seq1:\n    ruleid|contains:\n      - '5e000002-0000-4000-8000-000000000002'\n      - '5e000003-0000-4000-8000-000000000003'\n  seq2:\n    ruleid|contains:\n      - '5e000004-0000-4000-8000-000000000004'\n      - '5e000005-0000-4000-8000-000000000005'\n  seq3:\n    ruleid|contains:\n      - '5e000006-0000-4000-8000-000000000006'\n  seq4:\n    ruleid|contains:\n      - '5e000007-0000-4000-8000-000000000007'\n      - '5e000008-0000-4000-8000-000000000008'\n      - '5e000009-0000-4000-8000-000000000009'\n      - '5e00000a-0000-4000-8000-00000000000a'\n      - '5e00000b-0000-4000-8000-00000000000b'\n      - '5e00000c-0000-4000-8000-00000000000c'\n  seq5:\n    ruleid|contains:\n      - '5e00000d-0000-4000-8000-00000000000d'\n      - '5e00000e-0000-4000-8000-00000000000e'\n      - '5e00000f-0000-4000-8000-00000000000f'\n  seq6:\n    ruleid|contains:\n      - '5e000010-0000-4000-8000-000000000010'\n  timeframe: 30m\n  condition: chain by hostname\nfalsepositives:\n  - Unknown\nlevel: high\n",
+  "updated_at": "2026-04-22T10:00:00Z"
+}

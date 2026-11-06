@@ -1,0 +1,24 @@
+{
+  "id": "a7000000-0000-4000-8000-000000000028",
+  "name": "APT28",
+  "threat_type": "APT",
+  "severity": "CRITICAL",
+  "industries": ["Government", "Defense", "Energy"],
+  "geographies": ["Europe", "North America"],
+  "summary": "APT28 (Fancy Bear) is a Russian-linked threat actor associated with GRU Unit 26165. Known for spearphishing campaigns targeting government and defense sectors, frequently using living-off-the-land binaries and PowerShell for post-exploitation.",
+  "investigation": "Look for clustered execution of WinRAR archive extraction, MSHTA invocations, encoded PowerShell commands, and scheduled task creation under the same user/host within a 30-minute window. Pivot on the hostname to enumerate lateral movement attempts.",
+  "mitigation": "Patch CVE-2023-XXXX, enforce MFA on all privileged accounts, block executable email attachments, restrict MSHTA and Cscript/Wscript via AppLocker, monitor scheduled task creation by SYSTEM.",
+  "response": "Isolate affected host, revoke credentials of involved user accounts, hunt for lateral movement through SMB and WMI, capture memory and disk for forensic analysis, notify CISO and prepare for potential disclosure.",
+  "threat_actors": [
+    {
+      "id": "apt28",
+      "name": "APT28",
+      "description": "Russian GRU-linked advanced persistent threat group, also known as Fancy Bear, Sofacy, Sednit, Pawn Storm."
+    }
+  ],
+  "release_date": "2023-11-01",
+  "enabled": true,
+  "monitored_topics": null,
+  "source": "tdm",
+  "updated_at": "2026-04-22T10:00:00Z"
+}
