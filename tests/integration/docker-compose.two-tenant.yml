@@ -1,0 +1,207 @@
+# Two-tenant overlay for the integration stack — validates
+# per-customer correlation-pipeline isolation. Compose it on top of
+# docker-compose.yml, which supplies kafka + the shared topic-init:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.two-tenant.yml \
+#       up -d --build kafka topic-init topic-init-2t \
+#       flink-corr-a-jm flink-corr-a-tm flink-corr-b-jm flink-corr-b-tm \
+#       corr-job-a corr-job-b
+#
+#   uv run pytest -m integration tests/integration/test_two_tenant_isolation.py -v
+#
+# TWO SESSION CLUSTERS, not one with more slots. A session cluster assigns
+# slots from a shared pool, so two jobs submitted to one cluster can land on
+# either TaskManager — and the worker-side `Settings()` is rebuilt from the
+# TM's environment. One TM per tenant is what keeps JOB_ID / CORRELATION_PIPELINE_ID
+# honest on the worker, and it mirrors production, where each correlation
+# pipeline is its own FlinkDeployment.
+#
+# Ports 8091/8092 deliberately avoid 8081/8082 so this overlay can run beside
+# the single-tenant stack without a port clash.
+
+x-correlation-image-2t: &correlation-image-2t
+  build:
+    context: ../..
+    dockerfile: Dockerfile.correlation
+  image: detectflow-agent-correlation:integration
+
+x-tenant-a-env: &tenant-a-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  KAFKA_AUTH_METHOD: PLAINTEXT
+  KAFKA_STARTING_OFFSET: earliest
+  STATE_BACKEND: memory
+  CHECKPOINT_PATH: file:///tmp/flink-checkpoints
+  LOG_FORMAT: json
+  LOG_LEVEL: INFO
+  # JOB_ID is the deployment name; CORRELATION_PIPELINE_ID is the bare UUID and
+  # the only thing the chain stamp / chain_id scope may fall back to.
+  JOB_ID: corr-aaaaaaaa-0000-5000-a000-00000000000a
+  CORRELATION_PIPELINE_ID: aaaaaaaa-0000-5000-a000-00000000000a
+  CORRELATION_PIPELINE_NAME: tenant-a
+  KAFKA_CHAINS_CONFIG_TOPIC: detectflow.chains-config.aaaaaaaa-0000-5000-a000-00000000000a
+  KAFKA_CHAINS_RAW_TOPIC: detectflow.chains-raw.aaaaaaaa-0000-5000-a000-00000000000a
+  KAFKA_CHAINS_ANALYSED_TOPIC: detectflow.chains-analysed.aaaaaaaa-0000-5000-a000-00000000000a
+
+x-tenant-b-env: &tenant-b-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  KAFKA_AUTH_METHOD: PLAINTEXT
+  KAFKA_STARTING_OFFSET: earliest
+  STATE_BACKEND: memory
+  CHECKPOINT_PATH: file:///tmp/flink-checkpoints
+  LOG_FORMAT: json
+  LOG_LEVEL: INFO
+  JOB_ID: corr-bbbbbbbb-0000-5000-b000-00000000000b
+  CORRELATION_PIPELINE_ID: bbbbbbbb-0000-5000-b000-00000000000b
+  CORRELATION_PIPELINE_NAME: tenant-b
+  KAFKA_CHAINS_CONFIG_TOPIC: detectflow.chains-config.bbbbbbbb-0000-5000-b000-00000000000b
+  KAFKA_CHAINS_RAW_TOPIC: detectflow.chains-raw.bbbbbbbb-0000-5000-b000-00000000000b
+  KAFKA_CHAINS_ANALYSED_TOPIC: detectflow.chains-analysed.bbbbbbbb-0000-5000-b000-00000000000b
+
+services:
+
+  topic-init-2t:
+    image: apache/kafka:4.0.0
+    container_name: detectflow-topic-init-2t
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./topic-init/init-2t.sh:/init-2t.sh:ro
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    entrypoint: ["/bin/bash", "/init-2t.sh"]
+    restart: "no"
+
+  # ---------------------------------------------------------------- tenant A --
+
+  flink-corr-a-jm:
+    <<: *correlation-image-2t
+    container_name: detectflow-corr-a-jm
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-corr-a-jm
+        rest.address: flink-corr-a-jm
+        rest.bind-address: 0.0.0.0
+        execution.checkpointing.interval: 30s
+        execution.checkpointing.min-pause: 10s
+        state.backend.type: hashmap
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        taskmanager.numberOfTaskSlots: 2
+    ports:
+      - "8091:8081"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      topic-init-2t:
+        condition: service_completed_successfully
+
+  flink-corr-a-tm:
+    <<: *correlation-image-2t
+    container_name: detectflow-corr-a-tm
+    command: taskmanager
+    environment:
+      <<: *tenant-a-env
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-corr-a-jm
+        taskmanager.numberOfTaskSlots: 2
+        taskmanager.host: flink-corr-a-tm
+    depends_on:
+      flink-corr-a-jm:
+        condition: service_started
+
+  corr-job-a:
+    <<: *correlation-image-2t
+    container_name: detectflow-corr-job-a
+    environment:
+      <<: *tenant-a-env
+    command:
+      - /opt/flink/bin/flink
+      - run
+      - -d
+      - -m
+      - flink-corr-a-jm:8081
+      - -py
+      - /opt/flink/usrlib/app/jobs/correlation/__main__.py
+      - --pyFiles
+      - /opt/flink/usrlib
+      - --jarfile
+      - /opt/flink/lib/flink-sql-connector-kafka-4.0.1-2.0.jar
+      - --
+      - --input-topics
+      - detectflow.tagged-events.a1000000-0000-5000-a000-000000000001,detectflow.tagged-events.a1000000-0000-5000-a000-000000000002
+      - --job-id
+      - corr-aaaaaaaa-0000-5000-a000-00000000000a
+    depends_on:
+      flink-corr-a-jm:
+        condition: service_started
+      flink-corr-a-tm:
+        condition: service_started
+    restart: "no"
+
+  # ---------------------------------------------------------------- tenant B --
+
+  flink-corr-b-jm:
+    <<: *correlation-image-2t
+    container_name: detectflow-corr-b-jm
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-corr-b-jm
+        rest.address: flink-corr-b-jm
+        rest.bind-address: 0.0.0.0
+        execution.checkpointing.interval: 30s
+        execution.checkpointing.min-pause: 10s
+        state.backend.type: hashmap
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        taskmanager.numberOfTaskSlots: 2
+    ports:
+      - "8092:8081"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      topic-init-2t:
+        condition: service_completed_successfully
+
+  flink-corr-b-tm:
+    <<: *correlation-image-2t
+    container_name: detectflow-corr-b-tm
+    command: taskmanager
+    environment:
+      <<: *tenant-b-env
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-corr-b-jm
+        taskmanager.numberOfTaskSlots: 2
+        taskmanager.host: flink-corr-b-tm
+    depends_on:
+      flink-corr-b-jm:
+        condition: service_started
+
+  corr-job-b:
+    <<: *correlation-image-2t
+    container_name: detectflow-corr-job-b
+    environment:
+      <<: *tenant-b-env
+    command:
+      - /opt/flink/bin/flink
+      - run
+      - -d
+      - -m
+      - flink-corr-b-jm:8081
+      - -py
+      - /opt/flink/usrlib/app/jobs/correlation/__main__.py
+      - --pyFiles
+      - /opt/flink/usrlib
+      - --jarfile
+      - /opt/flink/lib/flink-sql-connector-kafka-4.0.1-2.0.jar
+      - --
+      - --input-topics
+      - detectflow.tagged-events.b1000000-0000-5000-b000-000000000003,detectflow.tagged-events.b1000000-0000-5000-b000-000000000004
+      - --job-id
+      - corr-bbbbbbbb-0000-5000-b000-00000000000b
+    depends_on:
+      flink-corr-b-jm:
+        condition: service_started
+      flink-corr-b-tm:
+        condition: service_started
+    restart: "no"

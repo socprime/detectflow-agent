@@ -1,0 +1,51 @@
+# Slim down the docker build context — keep only what the image needs.
+# Source layout: app/, lib/, pyproject.toml, uv.lock, log4j2.properties.
+# Everything else is host-side dev tooling, tests, IDE etc.
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# CI
+.github
+
+# Virtual envs / caches
+.venv
+venv
+env
+.uv
+.cache
+.ruff_cache
+.pytest_cache
+__pycache__
+*.py[cod]
+*.egg-info
+.Python
+build
+dist
+
+# Local config
+.env
+.env.local
+.env.example
+
+# IDE / OS
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Project internals not needed at runtime
+tests
+docs
+scripts
+README.md
+LICENSE
+Makefile
+
+# Logs
+*.log
+logs

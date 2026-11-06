@@ -1,0 +1,8 @@
+{
+  "correlation_pipeline_id": "3f2b8c14-9f6a-4c3d-8f21-2a7b5c9d1e04",
+  "correlation_pipeline_name": "Correlation Pipeline A",
+  "threshold_pct": 60,
+  "correlation_window_seconds": 300,
+  "excluded_active_threat_ids": [],
+  "updated_at": "2026-04-22T10:00:00Z"
+}

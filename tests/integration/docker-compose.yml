@@ -1,0 +1,299 @@
+# Local integration stack — Kafka + two Flink clusters (one per job) + LLM stub.
+#
+# Each Flink job runs on its OWN session cluster (own JM + own TM). The two
+# clusters never share slots, so the two jobs' Python operators never
+# share a TaskManager (thread mode by default; correlation can opt into process mode).
+#
+# Each cluster has an ephemeral `*-job-submitter` container that runs
+# `flink run -py app/jobs/.../__main__.py` against its own JM and exits.
+# The Pure-application-mode `standalone-job.sh start-foreground` pattern
+# is incompatible with our
+# Dockerfile.* layout (PyFlink in venv ships duplicate flink-dist /
+# commons-cli jars that LinkageError against /opt/flink/lib/), so we use
+# session-mode + per-cluster submitter as the next-best isolation that
+# keeps the Dockerfiles unchanged.
+#
+# Env vars (KAFKA_*, LLM_*, …) live on BOTH the TM (where Python workers
+# call `Settings()` at runtime) AND the submitter (where the job graph
+# is built before submission). The JM only orchestrates and does not
+# need them. Mirrors the prod K8s template's configMapRef + secretRef
+# pattern in `flink-deployment.yaml.j2`.
+#
+# `make integration-up` from the repo root brings the stack online.
+# `make integration-down` tears it down.
+
+# Two prod-aligned images (process vs thread mode must not share a TM). Built from the repo-root Dockerfiles used for production.
+x-correlation-image: &correlation-image
+  build:
+    context: ../..
+    dockerfile: Dockerfile.correlation
+  image: detectflow-agent-correlation:integration
+
+x-agent-image: &agent-image
+  build:
+    context: ../..
+    dockerfile: Dockerfile.agent
+  image: detectflow-agent-agent:integration
+
+# Settings env vars consumed by the Python runtime (Settings() on the TM
+# worker; settings on the submitter when building the graph).
+x-correlation-env: &correlation-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  KAFKA_AUTH_METHOD: PLAINTEXT
+  KAFKA_STARTING_OFFSET: earliest
+  STATE_BACKEND: memory
+  CHECKPOINT_PATH: file:///tmp/flink-checkpoints
+  LOG_FORMAT: json
+  LOG_LEVEL: INFO
+  JOB_ID: integration-correlation
+  # Bare correlation_pipelines.id UUID — must match `correlation_pipeline_id`
+  # in tests/fixtures/attack-chains/chains_config.json, which producer.py seeds
+  # onto the config topic (the envelope wins). Scopes chain_id; the
+  # helpers that recompute the expected id pass the same value.
+  CORRELATION_PIPELINE_ID: 3f2b8c14-9f6a-4c3d-8f21-2a7b5c9d1e04
+  CORRELATION_PIPELINE_NAME: Correlation Pipeline A
+
+x-agent-env: &agent-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  KAFKA_AUTH_METHOD: PLAINTEXT
+  KAFKA_STARTING_OFFSET: earliest
+  STATE_BACKEND: memory
+  CHECKPOINT_PATH: file:///tmp/flink-checkpoints
+  LOG_FORMAT: json
+  LOG_LEVEL: INFO
+  JOB_ID: integration-agent
+  LLM_BASE_URL: http://llm-stub:8000/v1
+  LLM_API_KEY: stub-key-not-used
+  LLM_MODEL: stub-model
+
+services:
+
+  # ---------- Kafka (KRaft, single broker) -----------------------------------
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: detectflow-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Two listeners: PLAINTEXT for
+      # in-compose services (kafka:9092) and PLAINTEXT_HOST for host-side
+      # clients (pytest, producer.py). A single advertised `kafka:9092`
+      # breaks host clients because rdkafka receives that hostname in the
+      # broker metadata and cannot resolve it from outside the compose net.
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Match the producer-side cap from app/connectors/kafka_sink.py:
+      # Kafka 4.x default max is 15min, our sink sets 600s, so the broker
+      # must accept that.
+      KAFKA_TRANSACTION_MAX_TIMEOUT_MS: 900000
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      CLUSTER_ID: "detectflow-integration"
+    ports:
+      - "19092:19092"   # host-side access; in-compose services use kafka:9092
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  topic-init:
+    image: apache/kafka:4.0.0
+    container_name: detectflow-topic-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./topic-init/init.sh:/init.sh:ro
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    entrypoint: ["/bin/bash", "/init.sh"]
+    restart: "no"
+
+  # A fresh named volume is created root-owned, while Flink runs as uid 9999 —
+  # so after every `make integration-clean` the JobManager died on startup with
+  # `Failed to create directory for shared state: file:/tmp/flink-checkpoints/
+  # <jid>/shared` and the whole suite came up red. One-shot chown, ordered ahead
+  # of both Flink containers (`service_completed_successfully`), the same shape
+  # as topic-init.
+  state-init:
+    image: alpine:3.20
+    container_name: detectflow-state-init
+    volumes:
+      - correlation-state:/state
+    command: ["chown", "-R", "9999:9999", "/state"]
+    restart: "no"
+
+  # ---------- LLM stub -------------------------------------------------------
+  llm-stub:
+    build: ./llm-stub
+    container_name: detectflow-llm-stub
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/healthz\").read()'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------- Correlation cluster -------------------------------------------
+  flink-correlation-jm:
+    <<: *correlation-image
+    container_name: detectflow-correlation-jm
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-correlation-jm
+        rest.address: flink-correlation-jm
+        rest.bind-address: 0.0.0.0
+        execution.checkpointing.interval: 30s
+        execution.checkpointing.min-pause: 10s
+        state.backend.type: hashmap
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        taskmanager.numberOfTaskSlots: 2
+    ports:
+      - "8081:8081"  # Correlation Flink Web UI
+    volumes:
+      - correlation-state:/tmp/flink-checkpoints
+    depends_on:
+      kafka:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+      state-init:
+        condition: service_completed_successfully
+
+  flink-correlation-tm:
+    <<: *correlation-image
+    container_name: detectflow-correlation-tm
+    command: taskmanager
+    environment:
+      <<: *correlation-env
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-correlation-jm
+        taskmanager.numberOfTaskSlots: 2
+        taskmanager.host: flink-correlation-tm
+    volumes:
+      - correlation-state:/tmp/flink-checkpoints
+    depends_on:
+      flink-correlation-jm:
+        condition: service_started
+      state-init:
+        condition: service_completed_successfully
+
+  correlation-job:
+    <<: *correlation-image
+    container_name: detectflow-correlation-job
+    environment:
+      <<: *correlation-env
+    command:
+      - /opt/flink/bin/flink
+      - run
+      - -d
+      - -m
+      - flink-correlation-jm:8081
+      - -py
+      - /opt/flink/usrlib/app/jobs/correlation/__main__.py
+      - --pyFiles
+      - /opt/flink/usrlib
+      - --jarfile
+      - /opt/flink/lib/flink-sql-connector-kafka-4.0.1-2.0.jar
+      - --
+      - --input-topics
+      - dest-windows-events-raw,dest-powershell-logs-raw,dest-cloudtrail-detections
+      - --job-id
+      - integration-correlation
+    depends_on:
+      flink-correlation-jm:
+        condition: service_started
+      flink-correlation-tm:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # ---------- Agent cluster -------------------------------------------------
+  flink-agent-jm:
+    <<: *agent-image
+    container_name: detectflow-agent-jm
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-agent-jm
+        rest.address: flink-agent-jm
+        rest.bind-address: 0.0.0.0
+        execution.checkpointing.interval: 30s
+        execution.checkpointing.min-pause: 10s
+        state.backend.type: hashmap
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        taskmanager.numberOfTaskSlots: 2
+    ports:
+      - "8082:8081"  # Agent Flink Web UI
+    depends_on:
+      kafka:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+
+  flink-agent-tm:
+    <<: *agent-image
+    container_name: detectflow-agent-tm
+    command: taskmanager
+    environment:
+      <<: *agent-env
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-agent-jm
+        taskmanager.numberOfTaskSlots: 2
+        taskmanager.host: flink-agent-tm
+    depends_on:
+      flink-agent-jm:
+        condition: service_started
+
+  agent-job:
+    <<: *agent-image
+    container_name: detectflow-agent-job
+    environment:
+      <<: *agent-env
+    command:
+      - /opt/flink/bin/flink
+      - run
+      - -d
+      - -m
+      - flink-agent-jm:8081
+      - -py
+      - /opt/flink/usrlib/app/jobs/agent/__main__.py
+      - --pyFiles
+      - /opt/flink/usrlib
+      - --jarfile
+      - /opt/flink/lib/flink-sql-connector-kafka-4.0.1-2.0.jar
+      - --
+      - --job-id
+      - integration-agent
+    depends_on:
+      flink-agent-jm:
+        condition: service_started
+      flink-agent-tm:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+      llm-stub:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  # Savepoint metadata is written by the JobManager and the state chunks by the
+  # TaskManager, so `test_membership_change_restore.py` only works if both see
+  # ONE filesystem at `state.checkpoints.dir`. Without the shared volume the
+  # drill passes by accident while both containers are the originals and fails
+  # the moment either is replaced. Dropped by `make integration-clean`.
+  correlation-state:

