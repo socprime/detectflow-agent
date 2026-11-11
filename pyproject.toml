@@ -1,6 +1,6 @@
 [project]
 name = "detectflow-agent"
-version = "2.3.2"
+version = "2.3.3"
 description = "Flink-side of the Attack Chains — correlation-job (HoS matcher) + agent-job (LLM enrichment)"
 requires-python = ">=3.11,<3.13"
 authors = [
